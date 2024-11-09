@@ -1379,6 +1379,10 @@ static int wpa_ft_store_pmk_r0(struct wpa_authenticator *wpa_auth,
 		eloop_register_timeout(session_timeout + 1, 0,
 				       wpa_ft_expire_pmk_r0, r0, NULL);
 
+	hostapd_ubus_add_wpa_ft_pmk_r0(spa, pmk_r0, pmk_r0_len, pmk_r0_name, WPA_PMK_NAME_LEN, 
+					identity, identity_len, radius_cui, radius_cui_len,
+					expires_in, session_timeout);
+
 	return 0;
 }
 
@@ -2975,6 +2979,59 @@ static int wpa_ft_set_key_mgmt(struct wpa_state_machine *sm,
 	return 0;
 }
 
+static int wpa_ft_fetch_pmk_r0_by_ubus(struct wpa_state_machine *sm, 
+					const struct wpa_ft_pmk_r0_sa **r0, 
+					const u8 *req_pmk_r0_name) 
+{
+	u8 pmk_r0[PMK_LEN_MAX] = {0};
+	u8 pmk_r0_name[WPA_PMK_NAME_LEN] = {0};
+	size_t pmk_r0_len = 0;
+	size_t pmk_r0_name_len = 0;
+	u8 identity[1024] = {0};
+	u8 radius_cui[1024] = {0};
+	size_t identity_len = 0, radius_cui_len = 0;
+	struct vlan_description vlan = {0};
+	int expires_in = 0;
+	int session_timeout = 0;
+	int ret;
+
+	if (wpa_ft_get_vlan(sm->wpa_auth, sm->encr_key_mac_addr, &vlan) < 0) {
+		wpa_printf(MSG_DEBUG, "FT: vlan not available for STA " MACSTR,
+			   MAC2STR(sm->encr_key_mac_addr));
+		return -1;
+	}
+
+	ret = hostapd_ubus_get_wpa_ft_pmk_r0(sm->encr_key_mac_addr, 
+											pmk_r0, &pmk_r0_len,
+											pmk_r0_name, &pmk_r0_name_len,
+											identity, &identity_len,
+											radius_cui, &radius_cui_len,
+											&expires_in, &expires_in);
+	if (ret < 0) {
+		wpa_printf(MSG_DEBUG, "FT: addr doesn't exist at ubus");
+		return -1;
+	}	
+
+	if (pmk_r0_name_len != WPA_PMK_NAME_LEN || os_memcmp(req_pmk_r0_name, pmk_r0_name, WPA_PMK_NAME_LEN) != 0) {
+		wpa_printf(MSG_DEBUG, "FT: pmk_r0_name isn't correct");
+		return -1;
+	}
+
+	if (wpa_ft_store_pmk_r0(sm->wpa_auth, sm->encr_key_mac_addr, pmk_r0, pmk_r0_len,
+								req_pmk_r0_name, sm->pairwise, &vlan, expires_in,
+								session_timeout, identity, identity_len,
+								radius_cui, radius_cui_len) < 0) {
+		wpa_printf(MSG_DEBUG, "FT: Could not store pmk r0 that fetch from the ubus");
+		return -1;
+	}
+	
+	if (wpa_ft_fetch_pmk_r0(sm->wpa_auth, sm->encr_key_mac_addr, req_pmk_r0_name, r0) < 0)
+		return -1;
+	
+	return 0;					
+}
+
+
 
 static int wpa_ft_local_derive_pmk_r1(struct wpa_authenticator *wpa_auth,
 				      struct wpa_state_machine *sm,
@@ -3001,9 +3058,10 @@ static int wpa_ft_local_derive_pmk_r1(struct wpa_authenticator *wpa_auth,
 		return -1; /* not our R0KH-ID */
 
 	wpa_printf(MSG_DEBUG, "FT: STA R0KH-ID matching local configuration");
-	if (wpa_ft_fetch_pmk_r0(sm->wpa_auth, sm->addr, req_pmk_r0_name, &r0) <
-	    0)
-		return -1; /* no matching PMKR0Name in local cache */
+	if (wpa_ft_fetch_pmk_r0(sm->wpa_auth, sm->encr_key_mac_addr, req_pmk_r0_name, &r0) < 0) {
+		if (wpa_ft_fetch_pmk_r0_by_ubus(sm, &r0, req_pmk_r0_name) < 0)
+			return -1; /* no matching PMKR0Name in local cache */
+	}
 
 	wpa_printf(MSG_DEBUG, "FT: Requested PMKR0Name found in local cache");
 

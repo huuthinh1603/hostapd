@@ -6,6 +6,9 @@
  * See README for more details.
  */
 
+#include <libubox/blobmsg_json.h>
+#include <json-c/json.h>
+
 #include "utils/includes.h"
 #include "utils/common.h"
 #include "utils/eloop.h"
@@ -2088,4 +2091,171 @@ int hostapd_ubus_notify_bss_transition_query(
 
 	return ureq.resp;
 #endif
+}
+
+
+int hostapd_ubus_add_wpa_ft_pmk_r0(const u8 *addr,
+					const u8 *pmk_r0, size_t pmk_r0_len,
+					const u8 *pmk_r0_name, size_t pmk_r0_name_len,
+					const u8 *identity, size_t identity_len,
+					const u8 *radius_cui, size_t radius_cui_len,
+					int expires_in, int session_timeout) 
+{
+	uint32_t id;
+	const char *objpath = "wpaft";
+	const char *method = "wpaft_pmkr0_add";
+	char macaddr[18] = {0};
+	void *arr;
+
+	if (ubus_lookup_id(ctx, objpath, &id)) {
+		wpa_printf(MSG_DEBUG, "ubus_lookup_id failed, object: %s", objpath);
+		return -1;
+	}
+
+	blob_buf_init(&b, 0);
+
+	sprintf(macaddr, "%02x:%02x:%02x:%02x:%02x:%02x", 
+				addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+	blobmsg_add_string(&b, "mac", macaddr);
+
+	arr = blobmsg_open_array(&b, "pmk_r0");
+	for (int i = 0; i < pmk_r0_len; ++i) 
+		blobmsg_add_u32(&b, NULL, pmk_r0[i]);
+	blobmsg_close_array(&b, arr);
+
+	arr = blobmsg_open_array(&b, "pmk_r0_name");
+	for (int i = 0; i < pmk_r0_name_len; ++i) 
+		blobmsg_add_u32(&b, NULL, pmk_r0_name[i]);
+	blobmsg_close_array(&b, arr);
+
+	arr = blobmsg_open_array(&b, "identity");
+	for (int i = 0; i < identity_len; ++i) 
+		blobmsg_add_u32(&b, NULL, identity[i]);
+	blobmsg_close_array(&b, arr);
+
+	arr = blobmsg_open_array(&b, "radius_cui");
+	for (int i = 0; i < radius_cui_len; ++i) 
+		blobmsg_add_u32(&b, NULL, radius_cui[i]);
+	blobmsg_close_array(&b, arr);
+
+	blobmsg_add_u32(&b, "expires_in", expires_in);
+	blobmsg_add_u32(&b, "session_timeout", session_timeout);
+
+	ubus_invoke(ctx, id, method, b.head, NULL, NULL, 1000);
+	blob_buf_free(&b);
+
+	return 0;
+}
+
+static void hostapd_ubus_get_wpa_ft_process(struct ubus_request *req, int type, struct blob_attr *msg) 
+{
+	struct json_object **root = (struct json_object **)req->priv;
+	char *out;
+
+	if (msg) {
+		out = blobmsg_format_json(msg, true);
+		if (!out) {
+			wpa_printf(MSG_ERROR, "blobmsg_format_json failed");
+			return;
+		}
+
+		wpa_printf(MSG_ERROR, "hostapd_ubus_get_wpa_ft_process: %s", out);
+
+		*root = json_tokener_parse(out);
+		if (*root == NULL) {
+			wpa_printf(MSG_ERROR, "json_tokener_parse failed");
+			return;
+		}
+	}
+}
+
+int hostapd_ubus_get_wpa_ft_pmk_r0(const u8 *addr,
+					u8 *pmk_r0, size_t *pmk_r0_len,
+					u8 *pmk_r0_name, size_t *pmk_r0_name_len,
+					u8 *identity, size_t *identity_len,
+					u8 *radius_cui, size_t *radius_cui_len,
+					int *expires_in, int *session_timeout) 
+{
+	uint32_t id;
+	const char *objpath = "wpaft";
+	const char *method = "wpaft_pmkr0_get";
+	struct json_object *root = NULL;
+	struct json_object *elem = NULL;
+	char macaddr[18] = {0};
+	int len;
+
+	if (ubus_lookup_id(ctx, objpath, &id)) {
+		wpa_printf(MSG_DEBUG, "ubus_lookup_id failed, object: %s", objpath);
+		return -1;
+	}
+
+	blob_buf_init(&b, 0);
+
+	sprintf(macaddr, "%02x:%02x:%02x:%02x:%02x:%02x", 
+				addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+	blobmsg_add_string(&b, "mac", macaddr);
+
+	ubus_invoke(ctx, id, method, b.head, hostapd_ubus_get_wpa_ft_process, &root, 1000);
+	blob_buf_free(&b);
+
+	if (root == NULL) 
+		return -1;
+
+	if (json_object_object_get_ex(root, "pmk_r0", &elem)) {
+		len = json_object_array_length(elem);
+		for (int i = 0; i < len; ++i) {
+			struct json_object *_elem = json_object_array_get_idx(elem, i);
+			if (json_object_is_type(_elem, json_type_int)) 
+				pmk_r0[i] = json_object_get_int(_elem);
+		}
+
+		*pmk_r0_len = len;
+	}
+
+	if (json_object_object_get_ex(root, "pmk_r0_name", &elem)) {
+		len = json_object_array_length(elem);
+		for (int i = 0; i < len; ++i) {
+			struct json_object *_elem = json_object_array_get_idx(elem, i);
+			if (json_object_is_type(_elem, json_type_int)) 
+				pmk_r0_name[i] = json_object_get_int(_elem);
+		}
+
+		*pmk_r0_name_len = len;
+	}
+
+	if (json_object_object_get_ex(root, "identity", &elem)) {
+		len = json_object_array_length(elem);
+		for (int i = 0; i < len; ++i) {
+			struct json_object *_elem = json_object_array_get_idx(elem, i);
+			if (json_object_is_type(_elem, json_type_int)) 
+				identity[i] = json_object_get_int(_elem);
+		}
+
+		*identity_len = len;
+	}
+
+
+	if (json_object_object_get_ex(root, "radius_cui", &elem)) {
+		len = json_object_array_length(elem);
+		for (int i = 0; i < len; ++i) {
+			struct json_object *_elem = json_object_array_get_idx(elem, i);
+			if (json_object_is_type(_elem, json_type_int)) 
+				radius_cui[i] = json_object_get_int(_elem);
+		}
+
+		*radius_cui_len = len;
+	}
+
+	if (json_object_object_get_ex(root, "session_timeout", &elem)) {
+		if (json_object_is_type(elem, json_type_int)) 
+			*session_timeout = json_object_get_int(elem);
+	}
+
+	if (json_object_object_get_ex(root, "expires_in", &elem)) {
+		if (json_object_is_type(elem, json_type_int)) 
+			*expires_in = json_object_get_int(elem);
+	}
+
+	json_object_put(root);
+	return 0;
 }

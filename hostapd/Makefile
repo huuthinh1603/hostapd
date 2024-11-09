@@ -172,7 +172,7 @@ ifdef CONFIG_UBUS
 CFLAGS += -DUBUS_SUPPORT
 CFLAGS += -Wno-discarded-qualifiers -Wno-unused-variable -Wno-tautological-compare -Wno-parentheses -Wno-return-type -Wno-maybe-uninitialized
 OBJS += ../src/ap/ubus.o
-LIBS += -lubox -lubus -lblobmsg_json
+LIBS += -lubox -lubus -lblobmsg_json -ljson-c
 endif
 
 ifdef CONFIG_CODE_COVERAGE
